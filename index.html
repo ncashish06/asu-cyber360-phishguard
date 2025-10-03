@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ASU PhishGuard — Email Checker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    .glass{backdrop-filter:blur(10px);background:rgba(255,255,255,.7)}
+    .mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-rose-50">
+  <div class="max-w-5xl mx-auto p-6">
+    <header class="mb-6">
+      <h1 class="text-3xl font-bold text-gray-900">ASU PhishGuard</h1>
+      <p class="text-gray-600">Evaluate emails for phishing — single or batch (CSV/Excel).</p>
+    </header>
+
+    <section class="glass rounded-2xl shadow-xl p-6 border border-black/5 mb-6">
+      <div class="flex flex-wrap items-center gap-4">
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+          <span class="text-sm text-gray-700">API status: <span id="apiStatus" class="font-semibold text-gray-900">Unknown</span></span>
+        </div>
+        <div class="text-xs text-gray-500">Target: <code id="apiUrlEcho" class="bg-white/70 px-1.5 py-0.5 rounded">/predict</code></div>
+        <div id="latencyBox" class="text-sm text-gray-600 ml-auto hidden">Latency: <span id="latencyVal" class="font-semibold text-gray-900 mono">—</span> ms</div>
+      </div>
+      <details class="group mt-3">
+        <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-900">Advanced settings</summary>
+        <div class="mt-3 grid gap-3 sm:grid-cols-3">
+          <div>
+            <label class="block text-xs text-gray-500">API URL</label>
+            <input id="apiUrl" type="text" class="w-full rounded-lg border border-gray-300 p-2 text-sm" value="/predict">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500">Decision threshold</label>
+            <input id="threshold" type="number" step="0.01" min="0" max="1" value="0.5" class="w-full rounded-lg border border-gray-300 p-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500">Batch concurrency</label>
+            <input id="concurrency" type="number" min="1" max="8" class="w-full rounded-lg border border-gray-300 p-2 text-sm">
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <main class="grid gap-6">
+      <section class="glass rounded-2xl shadow-xl p-6 border border-black/5">
+        <h2 class="text-xl font-semibold text-gray-900 mb-3">Check a Single Email</h2>
+        <textarea id="emailInput" rows="10" placeholder="From: Someone <someone@asu.edu>
+Subject: URGENT: Verify your payroll
+Body:
+Dear Student, your account will be disabled in 24 hours. Please verify your credentials at http://example.link…" class="w-full rounded-xl border border-gray-300 p-4 text-sm shadow-inner focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white/80"></textarea>
+        <div class="mt-4 flex items-center gap-3">
+          <button id="evalBtn" class="inline-flex items-center justify-center px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold shadow hover:bg-indigo-700">Evaluate</button>
+          <button id="clearBtn" class="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 bg-white hover:bg-gray-50">Clear</button>
+          <div id="singleLatencyBox" class="text-sm text-gray-600 ml-auto hidden">Single eval latency: <span id="singleLatencyVal" class="font-semibold text-gray-900 mono">—</span> ms</div>
+        </div>
+        <section id="resultCard" class="mt-6 hidden">
+          <div class="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+            <div class="flex items-center justify-between">
+              <h3 class="text-lg font-semibold text-gray-900">Result</h3>
+              <span id="timeStamp" class="text-xs text-gray-500"></span>
+            </div>
+            <div class="mt-3 flex items-center gap-3">
+              <div id="pill" class="px-3 py-1.5 rounded-full text-sm font-semibold"></div>
+              <div class="w-full bg-gray-100/80 rounded-full h-2 overflow-hidden"><div id="probBar" class="h-full bg-indigo-600 rounded-full" style="width:0%"></div></div>
+              <div id="probText" class="text-sm mono text-gray-800 w-16 text-right">0%</div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="glass rounded-2xl shadow-xl p-6 border border-black/5">
+        <h2 class="text-xl font-semibold text-gray-900 mb-3">Batch Check (CSV/Excel)</h2>
+        <div class="grid gap-3 sm:grid-cols-2 mb-3">
+          <div><label class="block text-xs text-gray-500 mb-1">Upload CSV or Excel</label><input type="file" id="fileInput" accept=".csv,.xlsx,.xls" class="w-full"></div>
+          <div><label class="block text-xs text-gray-500 mb-1">Text column</label><select id="textColumn" class="w-full rounded-lg border border-gray-300 p-2 text-sm"><option value="email_text">email_text</option></select></div>
+        </div>
+        <div class="flex items-center gap-3 mb-3">
+          <button id="startBatch" class="px-4 py-2 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50" disabled>Evaluate File</button>
+          <button id="clearBatch" class="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 bg-white hover:bg-gray-50" disabled>Clear</button>
+          <button id="downloadCsv" class="px-4 py-2 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 hidden">Download CSV</button>
+        </div>
+        <div>
+          <div id="batchProgress" class="text-sm text-gray-600 hidden">
+            Progress: <span id="batchDone" class="mono">0</span>/<span id="batchTotal" class="mono">0</span>
+          </div>
+          <div id="batchTime" class="text-sm text-gray-600 hidden">Execution time: <span id="execMs" class="mono">—</span> ms</div>
+        </div>
+        <div id="overallStats" class="hidden mb-3 text-sm font-medium text-gray-800">
+          Malicious: <span id="countMal" class="text-rose-600">0</span> •
+          Benign: <span id="countBen" class="text-emerald-600">0</span> •
+          Accuracy: <span id="accVal" class="mono">—</span>
+        </div>
+        <div class="overflow-auto border rounded-xl">
+          <table id="fileTable" class="hidden w-full border-collapse text-sm">
+            <thead class="bg-gray-50 sticky top-0">
+              <tr>
+                <th class="border p-2">#</th>
+                <th class="border p-2">Email Text (preview)</th>
+                <th class="border p-2">Prediction</th>
+                <th class="border p-2">Error</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const apiUrlInput=document.getElementById('apiUrl'),apiUrlEcho=document.getElementById('apiUrlEcho'),apiStatus=document.getElementById('apiStatus'),thresholdInput=document.getElementById('threshold'),concurrencyInput=document.getElementById('concurrency'),latencyBox=document.getElementById('latencyBox'),latencyVal=document.getElementById('latencyVal');
+    function currentApi(){return(apiUrlInput.value||'/predict').trim()}
+    window.addEventListener('load',()=>{apiUrlEcho.textContent=currentApi();concurrencyInput.value=Math.max(2,Math.min(8,Math.floor((navigator.hardwareConcurrency||4)/2)));pingApi()});
+    async function pingApi(){apiStatus.textContent='Checking…';try{const t0=performance.now();const resp=await fetch(currentApi(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'health check'})});const t1=performance.now();if(resp.ok){apiStatus.textContent='OK';latencyBox.classList.remove('hidden');latencyVal.textContent=Math.max(0,(t1-t0)|0)}else{apiStatus.textContent=`HTTP ${resp.status}`}}catch{apiStatus.textContent='Unavailable'}}
+
+    const emailInput=document.getElementById('emailInput'),evalBtn=document.getElementById('evalBtn'),clearBtn=document.getElementById('clearBtn'),resultCard=document.getElementById('resultCard'),pill=document.getElementById('pill'),probBar=document.getElementById('probBar'),probText=document.getElementById('probText'),timeStamp=document.getElementById('timeStamp'),singleLatencyBox=document.getElementById('singleLatencyBox'),singleLatencyVal=document.getElementById('singleLatencyVal');
+    async function evaluateEmail(){const t=emailInput.value.trim();if(!t)return;evalBtn.disabled=true;const e0=performance.now();try{const r=await fetch(currentApi(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});const e1=performance.now();singleLatencyBox.classList.remove('hidden');singleLatencyVal.textContent=Math.max(0,(e1-e0)|0);const a=await r.json();const n=Number(a.prob_malicious??0),l=a.label||(n>=Number(thresholdInput.value||.5)?'malicious':'benign'),p=Math.round(n*100);probBar.style.width=p+'%';probText.textContent=p+'%';pill.textContent=l==="malicious"?"Phishing (Malicious)":"Benign";pill.className="px-3 py-1.5 rounded-full text-sm font-semibold "+(l==="malicious"?"bg-rose-100 text-rose-800":"bg-emerald-100 text-emerald-800");timeStamp.textContent=new Date().toLocaleString();resultCard.classList.remove('hidden')}catch{alert("API error")}finally{evalBtn.disabled=false}}
+    evalBtn.addEventListener('click',evaluateEmail);clearBtn.addEventListener('click',()=>{emailInput.value='';resultCard.classList.add('hidden');singleLatencyBox.classList.add('hidden')});
+
+    const fileInput=document.getElementById('fileInput'),textColumn=document.getElementById('textColumn'),startBatch=document.getElementById('startBatch'),clearBatch=document.getElementById('clearBatch'),downloadCsvBtn=document.getElementById('downloadCsv'),fileTable=document.getElementById('fileTable'),tbody=fileTable.querySelector('tbody'),batchProgress=document.getElementById('batchProgress'),batchDone=document.getElementById('batchDone'),batchTotal=document.getElementById('batchTotal'),batchTime=document.getElementById('batchTime'),execMs=document.getElementById('execMs'),overallStats=document.getElementById('overallStats'),countMal=document.getElementById('countMal'),countBen=document.getElementById('countBen'),accVal=document.getElementById('accVal');
+    let parsedRows=[];let resultsForCsv=[];
+    function resetBatch(){parsedRows=[];resultsForCsv=[];textColumn.innerHTML=`<option value="email_text">email_text</option>`;fileTable.classList.add('hidden');tbody.innerHTML="";startBatch.disabled=true;clearBatch.disabled=true;downloadCsvBtn.classList.add('hidden');batchProgress.classList.add('hidden');batchTime.classList.add('hidden');overallStats.classList.add('hidden');batchDone.textContent='0';batchTotal.textContent='0';accVal.textContent='—';execMs.textContent='—'}
+    fileInput.addEventListener('change',handleFile);
+    function handleFile(e){
+      resetBatch();
+      const f=e.target.files[0];
+      if(!f)return;
+      const ext=(f.name.split(".").pop()||"").toLowerCase();
+      if(ext==='csv'){
+        Papa.parse(f,{header:true,skipEmptyLines:true,complete:r=>stashRows(r.data)});
+      }else if(ext==='xlsx'||ext==='xls'){
+        const rd=new FileReader();
+        rd.onload=t=>{
+          const wb=XLSX.read(t.target.result,{type:'binary'});
+          const ws=wb.Sheets[wb.SheetNames[0]];
+          stashRows(XLSX.utils.sheet_to_json(ws,{defval:""}));
+        };
+        rd.readAsBinaryString(f);
+      }
+    }
+    function stashRows(rows){
+      parsedRows=rows.map((r,i)=>({raw:r,idx:i+1}));
+      tbody.innerHTML="";
+      for(const {raw,idx} of parsedRows.slice(0,20)){
+        const preview=String(raw[textColumn.value]??raw.email_text??"").slice(0,160);
+        const tr=document.createElement("tr");
+        tr.innerHTML=`<td class="border p-2 mono">${idx}</td><td class="border p-2">${preview}</td><td class="border p-2"></td><td class="border p-2"></td>`;
+        tbody.appendChild(tr);
+      }
+      fileTable.classList.remove("hidden");
+      startBatch.disabled=false;
+      clearBatch.disabled=false;
+    }
+    clearBatch.addEventListener('click',()=>{resetBatch();fileInput.value=""});
+    startBatch.addEventListener('click',()=>runBatch());
+
+    async function runBatch(){
+      const col=textColumn.value||'email_text';
+      const total=parsedRows.length;
+      if(total===0)return;
+      resultsForCsv=[];
+      batchProgress.classList.remove('hidden');
+      overallStats.classList.remove('hidden');
+      batchTotal.textContent=String(total);
+      tbody.innerHTML="";
+      let mal=0,ben=0,done=0;
+      let correct=0,totalGold=0; // for accuracy
+      const t0 = performance.now(); // start timing
+
+      // Pre-render table rows
+      for(const {raw,idx} of parsedRows){
+        const preview=String(raw[col]??"").slice(0,160);
+        const tr=document.createElement("tr");
+        tr.innerHTML=`<td class="border p-2 mono">${idx}</td><td class="border p-2">${preview}</td><td class="border p-2">⏳</td><td class="border p-2"></td>`;
+        tbody.appendChild(tr);
+      }
+
+      // Send in large chunks via /predict_batch for speed
+      const CHUNK = 1024; // large to minimize HTTP overhead
+      for (let start = 0; start < total; start += CHUNK) {
+        const end = Math.min(start + CHUNK, total);
+        const slice = parsedRows.slice(start, end);
+        const texts = slice.map(({raw}) => String(raw[col] ?? ""));
+
+        const resp = await fetch(currentApi().replace('/predict','/predict_batch'), {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ texts })
+        });
+        const batchResults = await resp.json();
+
+        for (let j = 0; j < slice.length; j++) {
+          const { raw, idx } = slice[j];
+          const r = batchResults[j] || {};
+          const label = String(r.label || '').toLowerCase() || 'benign';
+
+          const tr = tbody.children[start + j];
+          tr.children[2].textContent = label;
+          tr.children[2].className = "border p-2 " + (label==="malicious"?"text-rose-600 font-bold":"text-emerald-700 font-bold");
+          tr.children[3].textContent = "";
+
+          if(label==="malicious") mal++; else ben++;
+
+          // accuracy vs ground truth if 'label' column exists in the input file
+          if(raw.label!==undefined && String(raw.label).trim()!==""){
+            totalGold++;
+            const goldRaw=String(raw.label).trim().toLowerCase();
+            const gold=(goldRaw==="1"||goldRaw==="malicious"||goldRaw==="phishing"||goldRaw==="spam")?"malicious":"benign";
+            if(gold===label) correct++;
+          }
+
+          resultsForCsv.push({
+            index: idx,
+            text: String(raw[col] ?? ""),
+            text_preview: String(raw[col] ?? "").slice(0,160),
+            prediction: label,
+            error: ""
+          });
+
+          done++;
+        }
+        batchDone.textContent = done;
+      }
+
+      // finalize counts + metrics
+      countMal.textContent=mal; 
+      countBen.textContent=ben;
+      accVal.textContent = totalGold>0 ? ((correct/totalGold*100).toFixed(1)+"%") : "—";
+
+      // show execution time
+      const t1 = performance.now();
+      execMs.textContent = Math.max(0, (t1 - t0) | 0);
+      batchTime.classList.remove('hidden');
+
+      downloadCsvBtn.classList.remove('hidden');
+    }
+
+    downloadCsvBtn.addEventListener('click',()=>{
+      if(!resultsForCsv.length) return;
+      const csv = Papa.unparse(resultsForCsv);
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'phishguard_batch_results.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
